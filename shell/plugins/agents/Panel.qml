@@ -566,6 +566,26 @@ Panel {
     return out
   }
 
+  // The soonest moment any measured window rolls over, or 0 when none is
+  // still running.
+  function nextResetMs(list, now) {
+    var soonest = 0
+    for (var i = 0; i < list.length; i++) {
+      var limits = list[i] ? (list[i].limits || []) : []
+      for (var j = 0; j < limits.length; j++) {
+        var reset = new Date(String((limits[j] || {}).resetsAt || "")).getTime()
+        if (isFinite(reset) && reset > now && (soonest === 0 || reset < soonest)) soonest = reset
+      }
+    }
+    return soonest
+  }
+
+  // A timer's interval is a 32-bit count of milliseconds, a little under 25
+  // days. A reset further off than that is waited for in more than one go.
+  function resetTickDelay(dueMs, now) {
+    return Math.max(0, Math.min(dueMs - now, 2147483647))
+  }
+
   // The window that decides how much room is left — the fullest one, since
   // that is what stops the next prompt.
   function bindingWindow(p) {
@@ -831,6 +851,51 @@ Panel {
     running: root.opened
     repeat: true
     onTriggered: root.nowMs = Date.now()
+  }
+
+  // The bar icon reads the same clock, and with the panel closed nothing
+  // moves it: a window that has reset would keep the icon lit until the
+  // panel is next opened. The record says when each window rolls over, so
+  // wait for the soonest one, then move the clock and ask for the new
+  // window's numbers rather than leave an assumed zero standing until the
+  // next refresh. That is one extra limits run per window that rolls over,
+  // against the twenty the regular refresh makes in a five-hour session.
+  //
+  // Due a few seconds past the reset itself, so the provider has rolled the
+  // window over before it is asked. 0 while no window is running.
+  readonly property double resetDueMs: {
+    var reset = nextResetMs(providers, nowMs - 3000)
+    return reset > 0 ? reset + 3000 : 0
+  }
+  onResetDueMsChanged: armResetTimer()
+  Component.onCompleted: armResetTimer()
+
+  Timer {
+    id: resetTimer
+    onTriggered: root.resetElapsed()
+  }
+
+  // Measured from the wall clock rather than nowMs, which may be hours old
+  // on a closed panel.
+  function armResetTimer() {
+    if (resetDueMs > 0) {
+      resetTimer.interval = resetTickDelay(resetDueMs, Date.now())
+      resetTimer.restart()
+    } else {
+      resetTimer.stop()
+    }
+  }
+
+  // Moving the clock past the reset changes resetDueMs, which arms the timer
+  // for the next one. A wait cut short by the interval limit goes round again.
+  function resetElapsed() {
+    var now = Date.now()
+    if (now >= resetDueMs) {
+      nowMs = now
+      usage.refreshLimits()
+    } else {
+      armResetTimer()
+    }
   }
 
   Timer {
