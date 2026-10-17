@@ -898,19 +898,6 @@ Panel {
     }
   }
 
-  // Timers stand still while the machine sleeps, so a reset that passed in
-  // the night would wait out the hours slept on top. Every suspend locks the
-  // session first, so an unlock is the first moment after a wake: catch up
-  // with the wall clock then. An unlock with no reset passed only rearms.
-  readonly property var lockService: bar?.shell?.firstPartyServiceFor("omarchy.lock")
-
-  Connections {
-    target: root.lockService
-    function onLockedChanged() {
-      if (!root.lockService.locked) root.resetElapsed()
-    }
-  }
-
   Timer {
     interval: 2800
     running: root.opened && root.summaryPhrases.length > 1 && root.addStage === "" && !root.blankSlate

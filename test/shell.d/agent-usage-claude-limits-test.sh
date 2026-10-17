@@ -387,8 +387,6 @@ assertEqual(resetTickDelay(tickNow - 7200000, tickNow), 0, 'a reset already past
 assert(!/id: resetTimer\n\s+repeat: true/.test(source), 'the reset timer is single-shot, not a recurring wake')
 assert(/if \(now >= resetDueMs\) \{\n      nowMs = now\n      usage\.refreshLimits\(\)/.test(source), 'a due reset moves the clock the bar icon reads and fetches the new window')
 assert(/nextResetMs\(providers, nowMs - 3000\)/.test(source), 'a reset stays ahead through its slack, so an open panel\'s clock cannot skip the fetch')
-assert(/firstPartyServiceFor\("omarchy\.lock"\)/.test(source), 'the panel follows the lock, which every suspend takes first')
-assert(/function onLockedChanged\(\) \{\n\s+if \(!root\.lockService\.locked\) root\.resetElapsed\(\)/.test(source), 'an unlock catches up with a reset that passed while the machine slept')
 
 // A model's weekly allowance rides under the Weekly row; one whose window has
 // no row of its own keeps a row.
