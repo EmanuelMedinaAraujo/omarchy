@@ -39,7 +39,7 @@ ln -s "$ROOT/config" "$ROOT/default" "$ROOT/bin" "$test_root/"
 # Keep this full shell focused on agents and idle, with no live authentication,
 # clipboard, power, network, or background services competing with the session.
 ROOT="$ROOT" TEST_ROOT="$test_root" TEST_HOME="$test_home" python3 - <<'PY'
-import datetime as dt, json, os, pathlib
+import datetime as dt, json, os, pathlib, re
 root = pathlib.Path(os.environ['ROOT'])
 test_root = pathlib.Path(os.environ['TEST_ROOT'])
 home = pathlib.Path(os.environ['TEST_HOME'])
@@ -60,6 +60,8 @@ record = {'id': 'claude', 'name': 'Claude Code', 'ready': True, 'tierLabel': 'Pr
 # Test-only IPC exposes state without replacing any production event handler.
 panel = test_root / 'shell/plugins/agents/Panel.qml'
 source = panel.read_text()
+clock_tick = re.search(r'interval: 30000[\s\S]*?onTriggered: ([^\n]+)', source)[1]
+reset_tick = re.search(r'id: resetTimer\n\s+onTriggered: ([^\n]+)', source)[1]
 needle = '    function open(): void { root.open() }'
 assert source.count(needle) == 1
 source = source.replace(needle, '''    function testSleep(): string {
@@ -71,7 +73,8 @@ source = source.replace(needle, '''    function testSleep(): string {
       return JSON.stringify({ alarming: root.alarming, due: root.resetDueMs,
         providers: root.providers.length, now: root.nowMs })
     }
-''' + needle)
+''' + '    function testClockTick(): string { ' + clock_tick + '; return "ok" }\n'
+    + '    function testResetTick(): string { ' + reset_tick + '; return "ok" }\n' + needle)
 panel.write_text(source)
 
 # Observe the actual host-created narrow proxy as well as the built-in panel.
@@ -160,3 +163,18 @@ done
 [[ $(wc -l <"$test_root/limit-fetches") == "1" ]] || fail_with_log "a repeated resume with no pending reset does not fetch"
 [[ $(wc -l <"$test_root/sleep-monitor-starts") == "1" ]] || fail_with_log "plugin rescan keeps the existing monitor"
 pass "plugin rescan keeps the monitor and proxy without duplicate resume fetches"
+
+# Dispatch the real clock handler before a queued reset handler, with both due.
+# Its clock assignment makes QML rebind the deadline and cancel the old timer.
+[[ $(shell_ipc omarchy.agents testSleep) == "ok" ]] || fail_with_log "test captures another expired deadline"
+[[ $(shell_ipc omarchy.agents testClockTick) == "ok" ]] || fail_with_log "test dispatches the actual panel clock handler"
+for _ in {1..80}; do
+  [[ $(wc -l <"$test_root/limit-fetches") == "2" ]] && break
+  sleep 0.1
+done
+[[ $(wc -l <"$test_root/limit-fetches") == "2" ]] || fail_with_log "a clock tick before the reset timer must fetch the expired window"
+[[ $(shell_ipc omarchy.agents testResetTick) == "ok" ]] || fail_with_log "test dispatches the queued reset handler"
+jq -e '.alarming == false and .due == 0' <<<"$(shell_ipc omarchy.agents testState)" >/dev/null ||
+  fail_with_log "the clock tick clears the expired alarm"
+[[ $(wc -l <"$test_root/limit-fetches") == "2" ]] || fail_with_log "the queued timer must not duplicate the clock tick's fetch"
+pass "the actual QML clock tick fetches a crossed deadline before a queued reset callback"

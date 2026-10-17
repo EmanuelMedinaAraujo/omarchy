@@ -799,9 +799,8 @@ Panel {
     if (addStage !== "running") addStage = ""
     resetKeys()
     if (providers.length === 0 && !checkProcess.running) checkProcess.running = true
-    nowMs = Date.now()
     if (panelFlick) panelFlick.contentY = 0
-    usage.refreshLimits()
+    if (!advanceClock()) usage.refreshLimits()
     Qt.callLater(function() { if (panel.loadedContent) panel.loadedContent.forceActiveFocus() })
   }
 
@@ -850,7 +849,7 @@ Panel {
     interval: 30000
     running: root.opened
     repeat: true
-    onTriggered: root.nowMs = Date.now()
+    onTriggered: root.advanceClock()
   }
 
   // The bar icon reads the same clock, and with the panel closed nothing
@@ -872,7 +871,7 @@ Panel {
 
   Timer {
     id: resetTimer
-    onTriggered: root.resetElapsed()
+    onTriggered: root.advanceClock()
   }
 
   // Measured from the wall clock rather than nowMs, which may be hours old
@@ -886,16 +885,21 @@ Panel {
     }
   }
 
-  // Moving the clock past the reset changes resetDueMs, which arms the timer
-  // for the next one. A wait cut short by the interval limit goes round again.
-  function resetElapsed() {
+  // Capture the pending deadline before moving the clock: the new clock can
+  // rebind resetDueMs and cancel its timer before that timer gets to fire.
+  // Every clock update comes through here so that reset still gets fetched.
+  function advanceClock() {
+    var due = resetDueMs
     var now = Date.now()
-    if (resetDueMs > 0 && now >= resetDueMs) {
-      nowMs = now
+    nowMs = now
+    if (due > 0 && now >= due) {
       usage.refreshLimits()
-    } else {
-      armResetTimer()
+      return true
     }
+    // An early timer or a wait capped by the interval limit needs another
+    // arm even when the deadline binding has not changed.
+    if (due > 0) armResetTimer()
+    return false
   }
 
   // QML timers do not count time asleep. Check the wall clock on resume,
@@ -905,7 +909,7 @@ Panel {
   Connections {
     target: root.idleService
     ignoreUnknownSignals: true
-    function onResumed() { root.resetElapsed() }
+    function onResumed() { root.advanceClock() }
   }
 
   Timer {
