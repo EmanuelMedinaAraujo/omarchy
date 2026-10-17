@@ -890,12 +890,22 @@ Panel {
   // for the next one. A wait cut short by the interval limit goes round again.
   function resetElapsed() {
     var now = Date.now()
-    if (now >= resetDueMs) {
+    if (resetDueMs > 0 && now >= resetDueMs) {
       nowMs = now
       usage.refreshLimits()
     } else {
       armResetTimer()
     }
+  }
+
+  // QML timers do not count time asleep. Check the wall clock on resume,
+  // fetching a missed reset or rearming a future one for its remaining wait.
+  readonly property var idleService: bar?.shell?.firstPartyServiceFor("omarchy.idle")
+
+  Connections {
+    target: root.idleService
+    ignoreUnknownSignals: true
+    function onResumed() { root.resetElapsed() }
   }
 
   Timer {

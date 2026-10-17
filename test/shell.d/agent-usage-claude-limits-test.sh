@@ -385,7 +385,7 @@ assertEqual(resetTickDelay(tickNow + 18000000, tickNow), 18000000, 'a reset hour
 assertEqual(resetTickDelay(tickNow + 30 * 86400000, tickNow), 2147483647, 'a reset past the longest interval a timer can hold is waited for in stages')
 assertEqual(resetTickDelay(tickNow - 7200000, tickNow), 0, 'a reset already past is due at once')
 assert(!/id: resetTimer\n\s+repeat: true/.test(source), 'the reset timer is single-shot, not a recurring wake')
-assert(/if \(now >= resetDueMs\) \{\n      nowMs = now\n      usage\.refreshLimits\(\)/.test(source), 'a due reset moves the clock the bar icon reads and fetches the new window')
+assert(/if \(resetDueMs > 0 && now >= resetDueMs\) \{\n      nowMs = now\n      usage\.refreshLimits\(\)/.test(source), 'a due reset moves the clock the bar icon reads and fetches the new window')
 assert(/nextResetMs\(providers, nowMs - 3000\)/.test(source), 'a reset stays ahead through its slack, so an open panel\'s clock cannot skip the fetch')
 
 // A model's weekly allowance rides under the Weekly row; one whose window has
