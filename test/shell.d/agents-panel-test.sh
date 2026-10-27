@@ -140,30 +140,45 @@ function panelFunction(name) {
 const dueBody = source.match(/readonly property double resetDueMs: \{([\s\S]*?)\n  \}/)[1]
 const tickBody = source.match(/interval: 30000[\s\S]*?onTriggered: ([^\n]+)/)[1]
 const timerBody = source.match(/id: resetTimer\n\s+onTriggered: ([^\n]+)/)[1]
+const refetchBody = source.match(/id: resetRefetchTimer\n\s+onTriggered: ([^\n]+)/)[1]
 const resumeBody = source.match(/function onResumed\(\) \{ ([^\n]+) \}/)[1]
+const guardMs = Number(source.match(/readonly property double resetFetchGuardMs: (\d+)/)[1])
 const openStart = source.indexOf('onOpenedChanged: if (opened) {')
 const openBody = source.slice(openStart + 'onOpenedChanged: '.length, source.indexOf('\n  }', openStart) + 4)
-const helpers = ['nextResetMs', 'resetTickDelay', 'armResetTimer', 'advanceClock'].map(panelFunction).join('\n')
+const helpers = ['nextResetMs', 'resetTickDelay', 'armResetTimer', 'advanceClock', 'refetchResetLimits'].map(panelFunction).join('\n')
 const startTime = Date.parse('2026-10-11T12:00:00Z')
 const firstReset = Date.parse('2026-10-11T13:30:00Z')
 const secondReset = Date.parse('2026-10-14T00:00:00Z')
 
-function panel(resets = [firstReset, secondReset]) {
+function panel(resets = [firstReset, secondReset], probeAt = startTime) {
   let wallClock = startTime
   let clock = wallClock
   let fetches = 0
+  let askedAgents = null
   const timer = {
+    interval: 0, running: false,
+    restart() { this.running = true },
+    stop() { this.running = false }
+  }
+  const refetchTimer = {
     interval: 0, running: false,
     restart() { this.running = true },
     stop() { this.running = false }
   }
   const model = {
     Date: class extends Date { static now() { return wallClock } },
-    providers: [{ limits: resets.map(reset => ({ resetsAt: new Date(reset).toISOString() })) }],
+    providers: [{ limits: resets.map(reset => ({ resetsAt: new Date(reset).toISOString() })), providerId: 'claude', limitsFetchedAt: probeAt }],
     // The open-and-resume handlers reach usage.enabledProviders and
     // checkProcess.running, so the mock carries what they read.
-    usage: { enabledProviders: [], refreshLimits() { fetches++ } },
+    usage: {
+      enabledProviders: [],
+      refreshLimits(agentIds) { fetches++; askedAgents = agentIds || null },
+      get asked() { return askedAgents }
+    },
     resetTimer: timer,
+    resetRefetchTimer: refetchTimer,
+    refetchResetDueMs: 0,
+    resetFetchGuardMs: guardMs,
     opened: true, addStage: '', panelFlick: null,
     resetKeys() {}, Qt: { callLater() {} },
     checkProcess: { running: false },
@@ -182,7 +197,7 @@ function panel(resets = [firstReset, secondReset]) {
   Object.defineProperty(model, 'resetDueMs', { get: () => model.dueBinding() })
   model.armResetTimer()
   return {
-    model, timer,
+    model, timer, refetchTimer,
     at(value) { wallClock = value },
     fire(body) { vm.runInContext(body, model) },
     get fetches() { return fetches }
@@ -203,6 +218,30 @@ p.at(firstReset + 3000)
 p.fire(timerBody)
 p.fire(tickBody)
 assertEqual(p.fetches, 1, 'reset timer before clock tick also fetches once at the exact deadline')
+
+// A probe measured seconds before the reset stands in the reuse cache, so
+// the due fetch cannot describe the new window. One further run, once the
+// guard has lapsed, asks only the provider whose numbers predate the reset;
+// one measured at the deadline was answered really and needs no refetch.
+p = panel([firstReset, secondReset], firstReset - 10000)
+p.at(firstReset + 3001)
+p.fire(tickBody)
+assertEqual(p.fetches, 1, 'a stale due fetch still fetches only once at the deadline')
+assertEqual(p.refetchTimer.interval, guardMs, 'a stale due fetch waits out the probe reuse guard')
+assertEqual(p.model.refetchResetDueMs, firstReset + 3000, 'the refetch remembers the deadline it outlived')
+p.at(firstReset + 25000)
+p.fire(refetchBody)
+assertEqual(p.fetches, 2, 'lapsed cache gets one refetch of the new window')
+assertEqual(p.model.refetchResetDueMs, 0, 'the refetch asks for a reset only once')
+assertDeepEqual(p.model.usage.asked, ['claude'], 'the refetch asks only the providers whose numbers predate the reset')
+
+p = panel([firstReset, secondReset], firstReset + 5000)
+p.at(firstReset + 3001)
+p.fire(tickBody)
+p.at(firstReset + 25000)
+p.fire(refetchBody)
+assertEqual(p.fetches, 1, 'a due fetch answered by a probe made past the deadline gets no refetch')
+assertEqual(p.model.usage.asked, null, 'no refetch asks no agents')
 
 p = panel()
 p.at(firstReset + 3001)

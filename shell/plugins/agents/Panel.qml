@@ -957,6 +957,7 @@ Panel {
   // window's numbers rather than leave an assumed zero standing until the
   // next refresh. That is one extra limits run per window that rolls over,
   // against the twenty the regular refresh makes in a five-hour session.
+  // One further run goes out when that fetch was answered by reuse, below.
   //
   // Due a few seconds past the reset itself, so the provider has rolled the
   // window over before it is asked. 0 while no window is running.
@@ -983,6 +984,36 @@ Panel {
     }
   }
 
+  // A reuse cache can answer the reset fetch with a probe that ran just
+  // before the deadline: numbers measured while the old window still ran,
+  // dressed up as live. That leaves the new window with assumed or old
+  // numbers until the next regular refresh, so wait out the collectors'
+  // probe reuse guard and ask again — only the providers whose record still
+  // predates the reset: one probed at the deadline itself was answered
+  // really and is skipped. The guard is 15s of probe reuse, so 20s from the
+  // deadline turns any record left behind into a real probe. A rare run
+  // beside the one the reset makes.
+  readonly property double resetFetchGuardMs: 20000
+
+  property double refetchResetDueMs: 0
+  Timer {
+    id: resetRefetchTimer
+    onTriggered: root.refetchResetLimits()
+  }
+
+  function refetchResetLimits() {
+    var due = refetchResetDueMs
+    refetchResetDueMs = 0
+    if (due <= 0) return
+    var stale = []
+    for (var i = 0; i < providers.length; i++) {
+      var p = providers[i]
+      if (p && p.limits && p.limits.length > 0 && Number(p.limitsFetchedAt) > 0 && Number(p.limitsFetchedAt) < due)
+        stale.push(p.providerId)
+    }
+    if (stale.length > 0) usage.refreshLimits(stale)
+  }
+
   // Capture the pending deadline before moving the clock: the new clock can
   // rebind resetDueMs and cancel its timer before that timer gets to fire.
   // Every clock update comes through here so that reset still gets fetched.
@@ -991,6 +1022,9 @@ Panel {
     var now = Date.now()
     nowMs = now
     if (due > 0 && now >= due) {
+      refetchResetDueMs = due
+      resetRefetchTimer.interval = resetFetchGuardMs
+      resetRefetchTimer.restart()
       usage.refreshLimits()
       return true
     }
